@@ -83,6 +83,10 @@ svg{width:100%; height:100%; display:block; touch-action:manipulation}
 .bola{fill:#fff; stroke:var(--linea); stroke-width:.1}
 .blanco{fill:rgba(196,70,47,.14); stroke:var(--linea); stroke-width:.07; stroke-dasharray:.16 .12; cursor:pointer}
 .blanco-in{fill:rgba(47,107,51,.3); stroke:var(--verde); stroke-dasharray:none}
+.manija circle{fill:rgba(196,70,47,.14); stroke:var(--linea); stroke-width:.075; stroke-dasharray:.16 .12; cursor:pointer}
+.manija text{fill:var(--linea); font-weight:700; pointer-events:none}
+.rayo{fill:none; stroke:var(--linea); stroke-width:.05; stroke-dasharray:.09 .11}
+.rayoN{fill:var(--linea); opacity:.7; font-family:var(--mono)}
 .pulso{animation:pulso 1.4s ease-in-out infinite}
 @keyframes pulso{0%,100%{opacity:.55}50%{opacity:1}}
 @media (prefers-reduced-motion:reduce){.pulso{animation:none;opacity:.9}}
@@ -116,38 +120,6 @@ button.sec{background:#EDF2E6; color:var(--tinta); font-weight:600; font-size:13
   font-size:17px; color:var(--tinta); cursor:pointer}
 .rosa button.sel{background:var(--verde); color:#fff; border-color:var(--verde)}
 .rosa .centro{border:0; background:transparent; font-size:10px; color:var(--tenue); cursor:default}
-
-/* ---------- compartir ---------- */
-function enlaceDe(cod){
-  if(!/^https?:$/.test(location.protocol)) return null;
-  return location.origin+location.pathname+'#'+cod;
-}
-
-function textoParaGrupo(){
-  const h=hoyo(), d=S.golpes-h.par;
-  const vs = d===0?'par' : (d>0?'+'+d:d);
-  const ruta = S.tiros.map(t=> t.dist===0 ? '❌' : EMOJI[t.dir.join(',')]+t.dist).join(' ');
-  const quien = S.nombre ? S.nombre : 'Alguien';
-  return [
-    `⛳ Paper Golf · código ${S.codigo}`,
-    `${S.campo.nombre} ${S.campo.cancha} · hoyo ${h.n} · par ${h.par} · ${h.yds} yds`,
-    ``,
-    `${quien}: ${S.golpes} golpes (${vs})`,
-    ruta,
-    ``,
-    enlaceDe(S.codigo) || `Abrí el mismo archivo y poné el código ${S.codigo} para jugar este hoyo.`
-  ].join('\n');
-}
-
-async function compartir(texto, boton){
-  try{
-    if(navigator.share){ await navigator.share({text:texto}); return; }
-    await navigator.clipboard.writeText(texto);
-    if(boton) boton.textContent='Copiado: pegalo en el grupo';
-  }catch(e){
-    if(boton) boton.textContent='Copiá el texto de arriba a mano';
-  }
-}
 
 /* ---------- capas ---------- */
 .capa{position:fixed; inset:0; background:rgba(30,53,36,.72); display:grid; place-items:center; padding:20px; z-index:5}
@@ -226,7 +198,7 @@ const CAMPOS = [{"id":"jockey-club-cancha-colorada","nombre":"JOCKEY CLUB","canc
 const S = {
   campo:null, hi:0, ball:[0,0], golpes:0, camino:[], die:null, dist:null,
   targets:[], mulligans:6, teeReroll:true, scores:[], modo:'dado', duro:false,
-  unico:false, codigo:'', tiros:[], nombre:'',
+  unico:false, codigo:'', tiros:[], nombre:'', hist:[],
   dirSel:null, fin:false
 };
 const $ = s=>document.querySelector(s);
@@ -303,14 +275,14 @@ const esCalle = c => c==='f'||c==='g';
 function cargarHoyo(){
   const h=hoyo();
   S.ball=[...h.tee]; S.golpes=0; S.camino=[[...h.tee]]; S.die=null; S.dist=null;
-  S.targets=[]; S.teeReroll=true; S.dirSel=null; S.tiros=[]; S.opt=mejorCamino();
+  S.targets=[]; S.teeReroll=true; S.dirSel=null; S.tiros=[]; S.hist=[]; S.opt=mejorCamino();
   $('#bNum').textContent=h.n;
   $('#bCampo').textContent=S.campo.nombre+' · '+S.campo.cancha;
   $('#bLugar').textContent=S.campo.lugar;
   $('#bFicha').innerHTML=`PAR ${h.par} · ${h.yds} YDS${h.si?'<br>SI '+h.si:''}`;
   $('#nota').textContent=h.nota||'';
   $('#dado').textContent='–';
-  msj('Salís desde la <em>T</em>. Tirá el dado para ver cuánto pega.');
+  msj('Salís desde la <em>T</em>. Elegí la dirección del tiro tocando una flecha.');
   dibujar(); controles();
 }
 
@@ -385,79 +357,78 @@ function calcularTargets(dist, vuela){
 }
 
 /* ---------- acciones ---------- */
+function guardar(){
+  S.hist.push({ball:[...S.ball], camino:S.camino.map(p=>[...p]), golpes:S.golpes,
+               tiros:S.tiros.map(t=>({...t})), teeReroll:S.teeReroll});
+}
+
+function elegirDir(d){
+  if(S.dirSel) return;
+  S.dirSel=d;
+  msj(`Dirección <em>${FLECHAS[d.join(',')]}</em> elegida y cerrada. Ahora tirá: caiga donde caiga.`);
+  dibujar(); controles();
+}
+
 function tirarDado(){
+  if(!S.dirSel) return;
   const cara=1+Math.floor(Math.random()*6);
   S.die=cara;
   const el=$('#dado'); el.classList.remove('rueda'); void el.offsetWidth; el.classList.add('rueda');
   el.textContent=cara;
-  S.dist=alcance();
   const c=celda(...S.ball);
+  const dist=alcance();
   const extra = esCalle(c) ? ' +1 por el fairway' : (c==='s' ? ' −1 por la arena' : '');
-  if(S.duro && S.dirSel){ resolverDuro(); return; }
-  S.targets=calcularTargets(S.dist, esCalle(c));
-  if(S.targets.length===0){
-    msj(`Sacaste <em>${cara}</em>${extra}: ${S.dist} casillas, y no hay ninguna caída legal. Puteá o usá un mulligan.`);
-  }else{
-    msj(`Sacaste <em>${cara}</em>${extra}. Pegás <em>${S.dist} casillas</em>: tocá dónde querés que caiga.`);
-  }
-  dibujar(); controles();
+  ejecutar(dist, esCalle(c), `Sacaste <em>${cara}</em>${extra}: ${dist} casillas.`);
 }
 
-function resolverDuro(){
-  const c=celda(...S.ball);
-  const t=tiro(S.dirSel, S.dist, esCalle(c));
+function ejecutar(dist, vuela, cabecera){
+  const t=tiro(S.dirSel, dist, vuela);
+  guardar();
   S.golpes++;
+  S.tiros.push({dir:S.dirSel, dist: t?dist:0});
+  S.dirSel=null; S.die=null; S.dist=null;
   if(!t){
-    S.tiros.push({dir:S.dirSel, dist:0});
-    msj(`Con ${S.dist} casillas en esa dirección la pelota no tiene dónde caer. El golpe cuenta igual: quedás donde estabas.`);
-    S.die=null; S.dist=null; S.dirSel=null; S.targets=[];
+    msj(`${cabecera} Ahí no hay dónde caer: agua, árboles o afuera de la cancha. El golpe cuenta y la pelota se queda. Podés gastar un mulligan para repetirlo.`);
     dibujar(); controles(); return;
   }
-  S.tiros.push({dir:S.dirSel, dist:S.dist});
-  aplicar(t, true);
-}
-
-function pegar(t){ S.golpes++; S.tiros.push({dir:t.dir, dist:S.dist}); aplicar(t, false); }
-
-function aplicar(t, yaContado){
-  S.camino.push(...t.ruta);
-  S.ball=[...t.land];
-  S.die=null; S.dist=null; S.targets=[]; S.dirSel=null; S.teeReroll=false;
-  $('#dado').textContent='–';
-  if(t.adentro){ terminarHoyo(); return; }
+  S.camino.push(...t.ruta); S.ball=[...t.land];
+  if(t.adentro){ S.teeReroll=false; terminarHoyo(); return; }
+  S.teeReroll=false;
   const c=celda(...S.ball);
-  const donde = c==='s' ? 'Caíste en la arena: el próximo tiro va con −1.'
+  const donde = c==='s' ? 'Caíste en la arena: el próximo va con −1.'
     : c==='g' ? 'Estás en el green.'
-    : esCalle(c) ? 'Buena, quedaste en el fairway: +1 en el próximo.'
+    : esCalle(c) ? 'Quedaste en el fairway: +1 en el próximo.'
     : 'Quedaste en el rough.';
-  msj(donde+' Tirá de nuevo.');
+  msj(`${cabecera} ${donde} Elegí la dirección del próximo.`);
   dibujar(); controles();
 }
 
 function putt(){
-  const t=calcularTargets(1,false);
-  if(t.length===0){ msj('Desde acá no se puede putear a ninguna casilla.'); return; }
-  S.dist=1; S.targets=t; S.die=null; $('#dado').textContent='–';
-  msj('Putt de <em>1 casilla</em>: tocá hacia dónde.');
-  dibujar(); controles();
-}
-
-function mulligan(){
-  if(S.die===null && S.dist===null){ msj('El mulligan sirve para repetir una tirada. Tirá el dado primero.'); return; }
-  if(S.mulligans<=0){ msj('Te quedaste sin mulligans en esta vuelta.'); return; }
-  S.mulligans--;
-  tirarDado();
-  msj($('#msj').innerHTML+` <span style="color:var(--tenue)">(mulligan usado, te quedan ${S.mulligans})</span>`);
-  controles();
+  if(!S.dirSel) return;
+  ejecutar(1, false, 'Putt de 1 casilla.');
 }
 
 function palo(dist, vuela){
+  if(!S.dirSel) return;
   const c=celda(...S.ball);
   if(dist===6 && !esCalle(c)){ msj('El driver sale sólo desde el fairway.'); return; }
   if(dist===3 && c==='s') dist=2;
-  S.dist=dist; S.targets=calcularTargets(dist, dist===6);
-  if(S.targets.length===0){ msj(`Con ${dist} casillas no hay caída legal. Probá otro palo.`); }
-  else msj(`${dist} casillas: tocá dónde querés que caiga.`);
+  ejecutar(dist, dist===6, `${dist} casillas.`);
+}
+
+function mulligan(){
+  if(!S.hist.length){ msj('Todavía no pegaste ningún golpe para repetir.'); return; }
+  const gratis = S.hist.length===1 && S.hist[0].teeReroll;
+  if(!gratis && S.mulligans<=0){ msj('Te quedaste sin mulligans en esta vuelta.'); return; }
+  const p=S.hist.pop();
+  S.ball=p.ball; S.camino=p.camino; S.golpes=p.golpes; S.tiros=p.tiros;
+  S.teeReroll = gratis ? false : p.teeReroll;
+  S.dirSel=null; S.die=null; S.dist=null;
+  $('#dado').textContent='–';
+  if(!gratis) S.mulligans--;
+  msj(gratis
+    ? 'Repetís la salida sin gastar mulligan. Elegí de nuevo la dirección.'
+    : `Mulligan: repetís el golpe. Te quedan ${S.mulligans}. Elegí la dirección.`);
   dibujar(); controles();
 }
 
@@ -558,18 +529,33 @@ function dibujar(){
   // recorrido
   if(S.camino.length>1)
     P.push(`<polyline class="tiro" points="${S.camino.map(p=>`${p[0]+.5},${p[1]+.5}`).join(' ')}"/>`);
-  // blancos
-  S.targets.forEach((t,i)=>{
-    P.push(`<circle class="blanco pulso ${t.adentro?'blanco-in':''}" data-t="${i}"
-      cx="${t.land[0]+.5}" cy="${t.land[1]+.5}" r=".42"/>`);
-  });
+  // dirección: flechas alrededor de la bola, o el rayo ya elegido
+  const [bx,by]=S.ball;
+  if(S.dirSel){
+    const [dx,dy]=S.dirSel;
+    for(let k=1;k<=7;k++){
+      const nx=bx+dx*k, ny=by+dy*k;
+      if(celda(nx,ny)===null) break;
+      P.push(`<circle class="rayo" cx="${nx+.5}" cy="${ny+.5}" r=".33"/>`);
+      P.push(`<text class="rayoN" x="${nx+.5}" y="${ny+.63}" text-anchor="middle" font-size=".34">${k}</text>`);
+    }
+  }else{
+    for(const d of DIRS){
+      const nx=bx+d[0], ny=by+d[1];
+      if(celda(nx,ny)===null) continue;
+      P.push(`<g class="manija pulso" data-d="${d.join(',')}" role="button" tabindex="0">
+        <circle cx="${nx+.5}" cy="${ny+.5}" r=".43"/>
+        <text x="${nx+.5}" y="${ny+.7}" text-anchor="middle" font-size=".55">${FLECHAS[d.join(',')]}</text></g>`);
+    }
+  }
   // bola
   P.push(`<circle class="bola" cx="${S.ball[0]+.5}" cy="${S.ball[1]+.5}" r=".22"/>`);
   P.push('</svg>');
   $('#mapa').innerHTML=P.join('');
   $('#gN').textContent=S.golpes;
-  document.querySelectorAll('.blanco').forEach(el=>{
-    el.onclick=()=>pegar(S.targets[+el.dataset.t]);
+  document.querySelectorAll('.manija').forEach(el=>{
+    const d=el.dataset.d.split(',').map(Number);
+    el.onclick=()=>elegirDir(d);
   });
 }
 
@@ -577,37 +563,28 @@ function msj(html){ $('#msj').innerHTML=html; }
 
 function controles(){
   const dado = S.modo==='dado';
+  const listo = !!S.dirSel;
+  const flecha = listo ? ' '+FLECHAS[S.dirSel.join(',')] : '';
   const b=$('#btnPrincipal');
-  $('#rosa').hidden = !(dado && S.duro);
+  $('#rosa').hidden = true;
+  b.disabled = !listo;
   if(dado){
-    b.textContent = S.die===null ? 'Tirar el dado' : 'Elegí dónde cae';
-    b.disabled = S.die!==null;
+    b.textContent = listo ? 'Tirar el dado'+flecha : 'Elegí la dirección en el mapa';
     b.onclick = tirarDado;
-    if(S.duro && !S.dirSel){ b.textContent='Elegí la dirección'; b.disabled=true; }
   }else{
-    b.textContent='Driver · 6 casillas'; b.disabled=false; b.onclick=()=>palo(6,true);
+    b.textContent = listo ? 'Driver · 6 casillas'+flecha : 'Elegí la dirección en el mapa';
+    b.onclick = ()=>palo(6,true);
   }
-  $('#btnPutt').textContent = dado ? 'Putt · 1 casilla' : 'Hierro · 3 casillas';
-  $('#btnPutt').onclick = dado ? putt : ()=>palo(3,false);
-  $('#btnMull').innerHTML = dado
+  const p=$('#btnPutt');
+  p.textContent = dado ? 'Putt · 1 casilla' : 'Hierro · 3 casillas';
+  p.disabled = !listo;
+  p.onclick = dado ? putt : ()=>palo(3,false);
+  const m=$('#btnMull');
+  m.disabled = false;
+  m.innerHTML = dado
     ? 'Mulligan<span class="mull">'+Array.from({length:6},(_,i)=>`<i class="${i<S.mulligans?'':'usado'}"></i>`).join('')+'</span>'
     : 'Putter · 1 casilla';
-  $('#btnMull').onclick = dado ? mulligan : ()=>palo(1,false);
-  if(dado && S.duro) pintarRosa();
-}
-
-function pintarRosa(){
-  const r=$('#rosa');
-  const orden=[[-1,-1],[0,-1],[1,-1],[-1,0],null,[1,0],[-1,1],[0,1],[1,1]];
-  r.innerHTML=orden.map(d=>{
-    if(!d) return '<button class="centro" disabled>dirección<br>del golpe</button>';
-    const k=d.join(',');
-    return `<button data-d="${k}" class="${S.dirSel&&S.dirSel.join(',')===k?'sel':''}">${FLECHAS[k]}</button>`;
-  }).join('');
-  r.querySelectorAll('button[data-d]').forEach(b=>b.onclick=()=>{
-    S.dirSel=b.dataset.d.split(',').map(Number); controles();
-    msj('Dirección elegida. Ahora tirá: caiga donde caiga.');
-  });
+  m.onclick = dado ? mulligan : ()=>palo(1,false);
 }
 
 /* ---------- compartir ---------- */
@@ -625,7 +602,7 @@ function textoParaGrupo(){
     `⛳ Paper Golf · código ${S.codigo}`,
     `${S.campo.nombre} ${S.campo.cancha} · hoyo ${h.n} · par ${h.par} · ${h.yds} yds`,
     ``,
-    `${quien}: ${S.golpes} golpes (${vs})`,
+    `${quien}: ${S.golpes} golpe${S.golpes===1?'':'s'} (${vs})`,
     ruta,
     ``,
     enlaceDe(S.codigo) || `Abrí el mismo archivo y poné el código ${S.codigo} para jugar este hoyo.`
@@ -690,9 +667,11 @@ function verMenu(){
     <h2>Cómo se juega</h2>
     <div class="sub">Tres reglas y el resto sale solo</div>
     <p style="font-size:13px;line-height:1.5;margin:0 0 12px">
-      Tirás el dado y esa es la distancia en casillas. Sumás 1 si pegás desde el fairway y restás 1 si estás en la arena.
-      Podés ir en las 8 direcciones. El agua y los árboles no se pisan: el tiro vuela sobre el agua siempre, y sobre los árboles sólo si salís del fairway.
-      Si caés en una flecha, la pelota rueda una casilla más.
+      Primero elegís la dirección tocando una de las ocho flechas: ahí queda, no se puede cambiar. Recién después tirás el dado,
+      y esa es la distancia en casillas, con +1 si salís del fairway y −1 desde la arena.
+      El agua y los árboles no se pisan: el tiro vuela sobre el agua siempre, y sobre los árboles sólo desde el fairway.
+      Si el número te deja en un lugar imposible, el golpe cuenta igual y la pelota se queda: para eso están los seis mulligans, que repiten el golpe entero.
+      Si caés en una flecha del terreno, la pelota rueda una casilla más.
     </p>
     <div class="leyenda">
       <div><span class="sw" style="background:var(--rough)"></span>Rough</div>
@@ -706,7 +685,6 @@ function verMenu(){
       <button class="acc sec" id="mDesafio">Desafiar al grupo con este hoyo</button>
       <button class="acc sec" id="mTarj">Ver la tarjeta</button>
       <button class="acc sec" id="mModo">${S.modo==='dado'?'Cambiar a modo sin dado':'Volver al modo con dado'}</button>
-      <button class="acc sec" id="mDuro">${S.duro?'Volver a elegir la caída':'Modo difícil: elegir dirección antes de tirar'}</button>
       <button class="acc sec" id="mReset">Reiniciar este hoyo</button>
       <button class="acc sec" id="mSalir">Salir al inicio</button>
       <button class="acc" id="mCerrar">Seguir jugando</button>
@@ -721,8 +699,6 @@ function verMenu(){
       $('#mTarj').onclick=()=>{ cerrarCapa(); verTarjeta(); };
       $('#mModo').onclick=()=>{ S.modo = S.modo==='dado'?'rapido':'dado'; S.die=null; S.dist=null; S.targets=[]; S.dirSel=null;
         cerrarCapa(); msj(S.modo==='dado'?'Modo con dado.':'Modo sin dado: elegís el palo.'); dibujar(); controles(); };
-      $('#mDuro').onclick=()=>{ S.duro=!S.duro; S.dirSel=null; S.die=null; S.dist=null; S.targets=[];
-        cerrarCapa(); msj(S.duro?'Modo difícil: primero la dirección, después el dado.':'Volviste a elegir la caída.'); dibujar(); controles(); };
       $('#mReset').onclick=()=>{ cerrarCapa(); cargarHoyo(); };
       $('#mSalir').onclick=()=>{ cerrarCapa(); $('#juego').classList.remove('on'); $('#home').classList.add('on'); };
     });
